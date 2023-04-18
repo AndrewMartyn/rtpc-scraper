@@ -1,319 +1,290 @@
 from bs4 import BeautifulSoup
-import os
-import zipfile
-import pandas as pd 
 import mechanize
-import itertools
+import pandas as pd
+import numpy as np
+import zipfile
+from pathlib import Path
 import shutil
-import argparse
+import os
 
-RTPC_BASE_URL = "http://rtpc.ucfprogrammingteam.org"
+# scraped information by set
+namesBySet = []
+pdfNamesBySet = []
+downloadsBySet = []
+datesBySet = []
+teamsBySet = []
+sourcesBySet = []
 
-PROBLEM_OFFSET = 0
-PROBLEMSET_OFFSET = 0
-HISTORY_OFFSET = 0
-SOURCE_OFFSET = 0
+# Problem fields
+source_ids = []
+names = []
+pdf_paths = []
+zip_urls = []
 
-class Problem:
-    id_iter = itertools.count(start=PROBLEM_OFFSET+1)
+# ProblemSet Fields
+problem_ids = []
+set_ids = []
 
-    def __init__(self, name, source, zip_link, pdf_link):
-        self.id = next(self.id_iter)
-        self.name = name
-        self.source = source
-        self.zip_link = zip_link
-        self.pdf_link = pdf_link
+# History fields (by problem)
+history_problem_ids = []
+dates = []
+team_ids = []
 
-    def __str__(self):
-        return f"{self.name}"
+# Source fields (by category)
+sourcesByProblem = []
+sourcesByCategory = []
 
-class History:
-    id_iter = itertools.count(start=HISTORY_OFFSET+1)
-    def __init__(self, problem, team, date_used):
-        self.id = next(self.id_iter)
-        self.problem = problem
-        self.team = team
-        self.date_used = date_used
-
-
-class Team:
-    id_iter = itertools.count(start=1)
-    def __init__(self, name):
-        self.id = next(self.id_iter)
-        self.name = name
-
-    def __str__(self):
-        return f"{self.name}"
-
-class Source:
-    id_iter = itertools.count(start=SOURCE_OFFSET+1)
-    def __init__(self, name):
-        self.id = next(self.id_iter)
-        self.name = name
-
-    def __str__(self):
-        return f"{self.name}"
-
-
-class ProblemSet:
-    id_iter = itertools.count(start=PROBLEMSET_OFFSET+1)
-    def __init__(self, name, zip_link, pdf_names):
-        self.id = next(self.id_iter)
-        self.problems = []
-        self.name = name
-        self.zip_link = zip_link
-        self.pdf_names = pdf_names
-
-    def __str__(self):
-        return f"{self.name} {self.zip_link}\n{[str(p) for p in self.problems]}"
-    
-    def __len__(self):
-        return len(self.problems)
 
 br = mechanize.Browser()
 
-sets = []
-problems = []
-all_problems = []
-historys = []
-teams = [Team("Varsity"), Team("JV"), Team("All")]
-sources = []
+def main():
+    login("", "")
 
-def scrape_range(start, end):
-    practices = {
-        "2022-2023": f"{RTPC_BASE_URL}/index.php/downloads/category/42-2022-2023/",
-        "2021-2022": f"{RTPC_BASE_URL}/index.php/downloads/category/41-2021-2022/",
-        "2020-2021": f"{RTPC_BASE_URL}/index.php/downloads/category/40-2020-2021/",
-        "2019-2020": f"{RTPC_BASE_URL}/index.php/downloads/category/38-2019-2020/",
-        "2018-2019": f"{RTPC_BASE_URL}/index.php/downloads/category/36-2018-2019/",
-        "2017-2018": f"{RTPC_BASE_URL}/index.php/downloads/category/35-2017-2018/",
-        "2016-2017": f"{RTPC_BASE_URL}/index.php/downloads/category/31-2016-2017/",
-        "2015-2016": f"{RTPC_BASE_URL}/index.php/downloads/category/30-2015-2016/",
-        "2014-2015": f"{RTPC_BASE_URL}/index.php/downloads/category/29-2014-2015/",
-        "2013-2014": f"{RTPC_BASE_URL}/index.php/downloads/category/27-2013-2014/",
-        "2012-2013": f"{RTPC_BASE_URL}/index.php/downloads/category/24-2012-2013/",
-        "2011-2012": f"{RTPC_BASE_URL}/index.php/downloads/category/17-2011-2012/",
-        "2010-2011": f"{RTPC_BASE_URL}/index.php/downloads/category/16-2010-2011/",
-        "2009-2010": f"{RTPC_BASE_URL}/index.php/downloads/category/15-2009-2010/",
-        "2008-2009": f"{RTPC_BASE_URL}/index.php/downloads/category/14-2008-2009/",
-        "2007-2008": f"{RTPC_BASE_URL}/index.php/downloads/category/13-2007-2008/",
-        "2006-2007": f"{RTPC_BASE_URL}/index.php/downloads/category/12-2006-2007/",
-        "2005-2006": f"{RTPC_BASE_URL}/index.php/downloads/category/11-2005-2006/",
-        "2004-2005": f"{RTPC_BASE_URL}/index.php/downloads/category/10-2004-2005/"
-    }
-    for i in range(end, start, -1):
-        print(f"Scraping practice data from {i-1}-{i}")
-        scrape(practices[f"{i-1}-{i}"])
+    addDataFromURL("https://rtpc.ucfprogrammingteam.org/index.php/downloads/category/41-2021-2022")
+    addDataFromURL("https://rtpc.ucfprogrammingteam.org/index.php/downloads/category/40-2020-2021")
+    addDataFromURL("https://rtpc.ucfprogrammingteam.org/index.php/downloads/category/38-2019-2020")
 
-def scrape(url):
+    cleanseData()
+
+    # patches
+    # pdfNamesBySet[31][7] = 'h'
+    # pdfNamesBySet[54][4] = 'minesweeper'
+    # pdfNamesBySet[54][7] = 'robotchallenge'
+
+    # fixNames()
+
+    # createProblemZips()
+
+    createProblemsDF()
+    createSourceDF()
+    createHistoryDF()
+    createProblemSetDF()
+    createSetsDF()
+    createTeamDF()
+
+def fixNames():
+    fileNames = [entry.replace(" ", "_") for entry in (f"{name}-{names.index(name)+1}" for name in names)]
+    alphabet = ['_', '-', '+', '=', '(', ')', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z']
+    newNames = [''.join([c for c in str if c.lower() in alphabet]) for str in fileNames]
+
+    for i in range(0, len(fileNames)):
+        print(f"working file {fileNames[i]}-({i}/{len(fileNames)})")
+        if os.path.exists(fr"zips/{fileNames[i]}.zip"):
+            print(f"Renaming {fileNames[i]}.zip to {newNames[i]}.zip")
+            os.rename(fr"zips/{fileNames[i]}.zip", fr"zips/{newNames[i]}.zip")
+        if os.path.exists(fr"pdfs/{fileNames[i]}.pdf"):
+            print(f"Renaming {fileNames[i]}.pdf to {newNames[i]}.pdf")
+            os.rename(fr"pdfs/{fileNames[i]}.pdf", fr"pdfs/{newNames[i]}.pdf")
+
+def createProblemZips():
+    for i in range(118, len(downloadsBySet)):
+        download = downloadsBySet[i]
+        zipName = download.split(":")[2]
+        print(f"Working on {zipName}-({i}/{len(downloadsBySet)})...")
+
+        br.retrieve(download, zipName+".zip")
+        # extract archive to folder
+        try:
+            with zipfile.ZipFile(zipName+".zip") as archive:
+                archive.extractall(zipName)
+        except zipfile.BadZipFile:
+            print("Bad zip file, skipping")
+            os.remove(zipName+".zip")
+            continue
+
+        # create a new folder for individual zips
+        pdfNames = pdfNamesBySet[i]
+        problemNames = namesBySet[i]
+        for j in range(0, len(pdfNames)):
+            pdfName = pdfNames[j]
+            rawProblemName = problemNames[j]
+            problemIndex = names.index(rawProblemName)+1
+            problemName = rawProblemName.replace(" ", "_")
+
+            name = f"{problemName}-{problemIndex}"
+            print(f"Working on problem {problemName}({pdfName})-{problemIndex}...")
+            if(os.path.exists(fr"zips/{name}.zip") or os.path.exists(fr"pdfs/{name}.pdf")):
+                print(f"problem {problemName} already exists, skipping...")
+                continue
+            
+
+            try:
+                shutil.copytree(fr"{zipName}/samples/{pdfName}", fr"zips/{name}/samples")     
+            except:
+                pass
+
+            try:
+                shutil.copytree(fr"{zipName}/data/{pdfName}", fr"zips/{name}/data")
+            except:
+                pass
+            
+            try:
+                shutil.copyfile(fr"{zipName}/problems/{pdfName}.pdf", fr"pdfs/{name}.pdf")
+            except:
+                pass
+
+            shutil.make_archive(fr"zips/{name}", "zip", fr"zips/{name}")
+            shutil.rmtree(fr"zips/{name}")
+
+        shutil.rmtree(fr"{zipName}")
+        os.remove(fr"{zipName}.zip")
+        print(f"Done with {zipName}!\n")
+
+
+def cleanseData():
+    # convert 2d problem array to 1d
+    namesWithDupes = []
+    for set in namesBySet:
+        for name in set:
+            namesWithDupes.append(name)
+
+    df = pd.DataFrame(namesWithDupes, columns=['names'])
+    df.loc[df['names'].duplicated(), 'names'] = None
+    namesWithNone = df['names'].tolist()
+
+    # create names with no duplicates
+    names.extend(list(dict.fromkeys(namesWithDupes)))
+
+    # create history_problem_ids
+    for i in range(0, len(namesWithNone)):
+        history_problem_ids.append(names.index(namesWithDupes[i]))
+
+    # create sources by category
+    sourcesByCategory.extend(list(dict.fromkeys(sourcesBySet)))
+
+    # create team_ids
+    for i in range(0, len(history_problem_ids)):
+        for j in range(0, len(namesBySet)):
+            if names[history_problem_ids[i]] in namesBySet[j]:
+                team = 3 # All
+                if teamsBySet[j] == "VARSITY":
+                    team = 1 # Varsity
+                elif teamsBySet[j] == "JUNIOR VARSITY":
+                    team = 2 # JV
+                    
+                team_ids.append(team)
+                break
+            
+
+    # create dates
+    for i in range(0, len(sourcesBySet)):
+        for _ in range(0, len(namesBySet[i])):
+            dates.append(datesBySet[i])
+
+    # create source_ids
+    for name in names:
+        for i in range(0, len(sourcesBySet)):
+            if name in namesBySet[i]:
+                source_ids.append(sourcesByCategory.index(sourcesBySet[i]))
+                break
+    
+    # create set_ids by problem
+    for i in range(0, len(namesBySet)):
+        for _ in range(0, len(namesBySet[i])):
+            set_ids.append(i)
+
+
+def createProblemsDF():
+    ProblemsDF = pd.DataFrame()
+    # ProblemsDF['id'] = np.arange(1, len(names)+1)
+    ProblemsDF['name'] = names
+    ProblemsDF['source_id'] = [id+1 for id in source_ids]
+
+    alphabet = ['_', '-', '+', '=', '(', ')', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z']
+    fname = [entry.replace(" ", "_") for entry in (f"{name}-{names.index(name)+1}" for name in names)]
+    file_name = [''.join([c for c in str if c.lower() in alphabet]) for str in fname]
+    file_name = [name if(os.path.exists(fr"zips/{name}.zip") or os.path.exists(fr"pdfs/{name}.pdf")) else "None" for name in file_name]
+    ProblemsDF['zip_link'] = file_name
+    ProblemsDF['pdf_link'] = file_name
+    
+    print("Exporting problems.csv")
+    ProblemsDF.to_csv(r'problems.csv', index=False, header=True)
+
+
+def createSetsDF():
+    SetsDF = pd.DataFrame()
+    SetsDF['name'] = ["rtpc"+str(i) for i in range(0, len(downloadsBySet))]
+    SetsDF['zip_link'] = downloadsBySet
+    
+    print("Exporting sets.csv")
+    SetsDF.to_csv(r'sets.csv', index=False, header=True)
+
+
+def createProblemSetDF():
+    ProblemSetDF = pd.DataFrame()
+    ProblemSetDF['set_id'] = [id+1 for id in set_ids]
+    ProblemSetDF['problem_id'] = [id+1 for id in history_problem_ids]
+
+    print("Exporting problemset.csv")
+    ProblemSetDF.to_csv(r'problemset.csv', index=False, header=True)
+    
+
+def createSourceDF():
+    SourceDF = pd.DataFrame()
+    # SourceDF['id'] = np.arange(1, len(sourcesByCategory)+1)
+    SourceDF['name'] = sourcesByCategory
+
+    print("Exporting source.csv")
+    SourceDF.to_csv(r'source.csv', index=False, header=True)
+
+
+def createTeamDF():
+    TeamDF = pd.DataFrame()
+    # TeamDF['id'] = [1, 2, 3]
+    TeamDF['name'] = ["Varsity", "JV", "All"]
+
+    print("Exporting team.csv")
+    TeamDF.to_csv(r'team.csv', index=False, header=True)
+
+
+def createHistoryDF():
+    HistoryDF = pd.DataFrame()
+    # HistoryDF['id'] = np.arange(1, len(dates)+1)
+    HistoryDF['problem_id'] = [id+1 for id in history_problem_ids]
+    HistoryDF['team_id'] = team_ids
+    HistoryDF['date'] = pd.to_datetime(dates).strftime('%Y-%m-%d')
+
+    print("Exporting history.csv")
+    HistoryDF.to_csv(r'history.csv', index=False, header=True)
+
+
+def login(username, password):
+    br.open("https://rtpc.ucfprogrammingteam.org/index.php")
+    br.select_form(nr=0)
+    br.form['username'] = username
+    br.form['password'] = password
+    br.submit()
+
+
+def addDataFromURL(url):
     br.open(url)
     soup = BeautifulSoup(br.response(), 'html.parser')
 
-    sets_html = soup.select("div.pd-filebox")
+    problemSets = soup.select("div.pd-filebox")
+    problemSetDescriptions = soup.select("div.pd-fdesc")
+    problemSetSolutions = soup.select("div.pd-float")
 
-    
-    for set_html in sets_html:
-        problem_names = [raw_problem.text.split(" (")[0] for raw_problem in set_html.find_all("em")[1:-1]]
-        pdf_names = [raw_problem.text.split("(")[1].split(")")[0] for raw_problem in set_html.find_all("em")[1:-1]]
+    # get problem set and problem names
+    namesBySet.extend([[em.text.rsplit(" ", 1)[0] for em in desc.select("em")[1:-1]] for desc in problemSetDescriptions])
+    pdfNamesBySet.extend([[em.text.split('(', 1)[1].split(')')[0] for em in desc.select("em")[1:-1]] for desc in problemSetDescriptions])
 
-        source_name = set_html.find_all("em")[-1].text[8:]
-        if(source_name[0:9] == "Various ("):
-            source_name = source_name.split("(")[1].split(")")[0]
+    # get download urls
+    downloadsBySet.extend(["https://rtpc.ucfprogrammingteam.org" + problemSet.select("a")[0]['href'] for problemSet in problemSetSolutions])
 
-        download = RTPC_BASE_URL + set_html.find_all("a")[0]['href']
-        # team = set_html.find_all("a")[0].text.split("[")[1].split("]")[0] # TODO: handle not found and check in multiple locations
+    # get problem sources
+    sourcesBySet.extend([desc.select("em")[-1:][0].text[8:] for desc in problemSetDescriptions])
+
+    # get teams
+    for desc in problemSetDescriptions:
         try:
-            team = set_html.find_all("p")[0].text.split("[")[1].split("]")[0]
+            teamsBySet.append(desc.select("p")[0].text.split('[', 1)[1].split(']')[0])
         except:
-            team = "All"
-            pass
+            # print("team not found\n")
+            teamsBySet.append("NOTFOUND")
 
-        if(team == "JUNIOR VARSITY"):
-            team = "JV"
-        elif(team == "VARSITY"):
-            team = "Varsity"
-        else:
-            team = "All"
-        team = Team(team)
-        date = pd.to_datetime(set_html.find_all("a")[0].text.split("(")[1].split(")")[0]).strftime("%Y-%m-%d")
-        
-        problem_set = ProblemSet(source_name, download, pdf_names)
+    # get date used
+    datesBySet.extend([problemSet.select("a")[0].text.split('(', 1)[1].split(')')[0] for problemSet in problemSetSolutions])
 
-        for i in range(len(problem_names)):
-            file_name = create_file_name(problem_names[i])
-
-            if(source_name not in [s.name for s in sources]):
-                source = Source(source_name)
-                sources.append(source)
-            else:
-                for s in sources:
-                    if(s.name == source_name):
-                        source = s
-                        break
-
-            problem = Problem(problem_names[i], source, file_name, file_name)
-
-            # fix file name to add index
-            problem.zip_link = f"{problem.zip_link}-{problem.id}"
-            problem.pdf_link = f"{problem.pdf_link}-{problem.id}"
-
-            problem_set.problems.append(problem)
-
-            if problem.name not in [p.name for p in problems]:
-                problems.append(problem)
-                history = History(problem, team, date)
-                historys.append(history)
-            else:
-                for p in problems:
-                    if(p.name == problem.name):
-                        history = History(p, team, date)
-                        historys.append(history)
-                        break
-            
-            
-
-        sets.append(problem_set)
-    print("Done scraping " + url)
-
-def create_file_name(problem_name):
-    alphabet = ['_', '-', '+', '=', '(', ')', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z']
-    file_name = problem_name.replace(" ", "_")
-    file_name = ''.join([c for c in file_name if c.lower() in alphabet])
-    return file_name
-
-def export():
-    # problems df
-    problems_df = pd.DataFrame()
-    problems_df['name'] = [p.name for p in problems]
-    problems_df['source_id'] = [p.source.id for p in problems]
-    problems_df['zip_link'] = [p.zip_link for p in problems]
-    problems_df['pdf_link'] = [p.pdf_link for p in problems]
-    print("Exporting problems.csv")
-    problems_df.to_csv(r'problems.csv', index=False, header=True)
-
-    # sets df
-    sets_df = pd.DataFrame()
-    sets_df['id'] = [s.id for s in sets]
-    sets_df['name'] = [s.name for s in sets]
-    sets_df['zip_link'] = [s.zip_link for s in sets]
-    print("Exporting sets.csv")
-    sets_df.to_csv(r'sets.csv', index=False, header=True)
-
-    #problemsets df
-    problemsets_df = pd.DataFrame()
-    problemsets_df['problem_id'] = [p.id for s in sets for p in s.problems]
-    problemsets_df['set_id'] = [s.id for s in sets for _ in s.problems]
-    print("Exporting problemsets.csv")
-    problemsets_df.to_csv(r'problemsets.csv', index=False, header=True)
-
-    #sources df
-    sources_df = pd.DataFrame()
-    sources_df['id'] = [s.id for s in sources]
-    sources_df['name'] = [s.name for s in sources]
-    print("Exporting sources.csv")
-    sources_df.to_csv(r'sources.csv', index=False, header=True)
-
-    #history df
-    history_df = pd.DataFrame()
-    history_df['problem_id'] = [h.problem.id for h in historys]
-    history_df['team'] = [h.team.id for h in historys]
-    history_df['date'] = [h.date_used for h in historys]
-    print("Exporting history.csv")
-    history_df.to_csv(r'history.csv', index=False, header=True)
-
-    # teams df
-    teams_df = pd.DataFrame()
-    teams_df['id'] = [t.id for t in teams]
-    teams_df['name'] = [t.name for t in teams]
-    print("Exporting teams.csv")
-    teams_df.to_csv(r'teams.csv', index=False, header=True)
-
-def create_zips_and_pdfs(do_zips, do_pdfs):
-    if(not os.path.exists("zips") and do_zips):
-        os.mkdir("zips")
-    if(not os.path.exists("pdfs") and do_pdfs):
-        os.mkdir("pdfs")
-
-    for i in range(len(sets)):
-        download = sets[i].zip_link
-        zip_name = download.split(":")[2]
-
-        print(f"Working on zip {zip_name} {i+1}/{len(sets)}...")
-        if(not os.path.exists(f"{zip_name}.zip")):
-            br.retrieve(download, f"{zip_name}.zip")
-        try:
-            with zipfile.ZipFile(f"{zip_name}.zip", 'r') as zip_ref:
-                zip_ref.extractall(zip_name)
-        except:
-            print(f"Error with {zip_name} {i}, skipping.")
-            os.remove(f"{zip_name}.zip")
-            continue
-
-        pdf_names = sets[i].pdf_names
-        file_names = [p.zip_link for p in sets[i].problems]
-        for j in range(len(pdf_names)):
-            pdf_name = pdf_names[j]
-            file_name = file_names[j]
-            if(os.path.exists(f"pdfs/{file_name}.pdf") or os.path.exists(f"zips/{file_name}.zip")):
-                print(f"Problem {file_name} already exists, skipping.")
-                continue
-
-            print(f"Working  {file_name} {j+1}/{len(pdf_names)}...")
-            if(do_zips):
-                try:
-                    shutil.copytree(fr"{zip_name}/samples/{pdf_name}", fr"zips/{file_name}/samples")     
-                except:
-                    pass
-
-                try:
-                    shutil.copytree(fr"{zip_name}/data/{pdf_name}", fr"zips/{file_name}/data")
-                except:
-                    pass
-            
-            if(do_pdfs):
-                try:
-                    shutil.copyfile(fr"{zip_name}/problems/{pdf_name}.pdf", fr"pdfs/{file_name}.pdf")
-                except:
-                    pass
-
-            shutil.make_archive(fr"zips/{file_name}", "zip", fr"zips/{file_name}")
-            shutil.rmtree(fr"zips/{file_name}")
-
-        shutil.rmtree(fr"{zip_name}")
-        os.remove(fr"{zip_name}.zip")
-        print(f"Done with {zip_name}!\n")
-
-
-
-# seniordesign:g0-Kn!gh+$2022
-def login():
-    br.open("https://rtpc.ucfprogrammingteam.org/index.php")
-    br.select_form(nr=0)
-    br.form['username'] = ""
-    br.form['password'] = ""
-    br.submit()
-
-def main():
-    parser = argparse.ArgumentParser(description="example: python3 scraper.py --start 2022 --end 2023 --export --pdfs --zips which would scrape the year 2022-2023 and export .csvs as well as pdfs and zips")
-    # parser.add_argument("--username", help="RTPC username", required=True)
-    # parser.add_argument("--password", help="RTPC password", required=True)
-    parser.add_argument("--export", help="Export .csv tables", action="store_true")
-    parser.add_argument("--zips", help="Create individual problem zip", action="store_true")
-    parser.add_argument("--pdfs", help="Create individual problem pdfs", action="store_true")
-    parser.add_argument("--start", help="Start year to scrape", type=int)
-    parser.add_argument("--end", help="End year to scrape", type=int)
-    args = parser.parse_args()
-
-    login()
-    
-    
-    scrape_range(args.start, args.end)
-
-    if(args.export):
-        export()
-
-    if(args.zips or args.pdfs):
-        create_zips_and_pdfs(args.zips, args.pdfs)
 
 if __name__ == "__main__":
     main()
