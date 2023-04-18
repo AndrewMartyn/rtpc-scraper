@@ -289,8 +289,8 @@ def create_zips_and_pdfs(do_zips, do_pdfs):
 def login():
     br.open("https://rtpc.ucfprogrammingteam.org/index.php")
     br.select_form(nr=0)
-    br.form['username'] = "seniordesign"
-    br.form['password'] = "g0-Kn!gh+$2022"
+    br.form['username'] = ""
+    br.form['password'] = ""
     br.submit()
 
 def main():
